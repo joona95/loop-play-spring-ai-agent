@@ -374,3 +374,177 @@ data:.
 | 파싱 | 받고 즉시 파싱 | 마크다운·JSON은 완결 전 파싱 불가 → 스트리밍 중 raw, 완료 후 포맷(2단계 렌더) |
 | 상태관리 | 응답 객체 1개 | 누적 버퍼 + 스트림 생명주기 상태(연결중/수신중/완료/에러/취소) |
 
+
+---
+
+## 4단계: Observability + AI 코드 리뷰
+
+**목표**: LLM에 실제 전달되는 프롬프트·토큰을 직접 관측하고, AI 생성 코드의 프로덕션 결함을 비판적으로 검토한다.
+
+### 구현
+
+#### 1. `/api/v1/support` 호출 후 콘솔 로그 관측 결과
+
+- 질문 : `주문번호 2024-1234 배달 어디쯤에 있어요?`
+
+**토큰·응답시간** (`PerformanceLoggingAdvisor`)
+
+```text
+response: { "metadata": { "model":"qwen2.5",
+    "usage": { "promptTokens":1248, "completionTokens":84, "totalTokens":1332 } },
+  "results":[{ "metadata":{ "finishReason":"stop" },
+    "output":{ "messageType":"ASSISTANT", "text":
+      "{\"category\":\"DELIVERY\",\"confidenceLevel\":\"MEDIUM\",\"neededInfo\":[\"주문 상태\"],\"nextAction\":\"주문 상태 확인 후 배송 위치 안내\",\"summary\":\"배달이 어디쯤 진행되었는지 확인한 후, 현재 위치를 알려드리겠습니다.\",\"urgency\":\"NORMAL\"}" }}]}
+```
+
+| 입력 토큰 | 출력 토큰 | 총 토큰 | 응답 시간 |
+|---|---|---|---|
+| **1248** | 84 | 1332 | **31,673 ms** |
+
+**LLM에 실제 전달된 프롬프트**
+
+(1) 프롬프트 전달 내용
+
+```text
+request: ChatClientRequest[prompt=Prompt{messages=[
+  SystemMessage{textContent='[역할]
+  당신은 배달 고객 상담 AI 에이전트입니다.
+  주문/결제/배달/취소/환불 및 서비스 불만(...) 관련 문의에 대해 정확하고 친절하게 응대합니다.
+  ... ([규칙]/[금지]/[응답 포맷] 전문 — 1단계 본문과 동일) ...',
+    messageType=SYSTEM},
+  UserMessage{content='주문번호 2024-1234 배달 어디쯤에 있어요?', messageType=USER}
+], modelOptions=OllamaOptions},
+```
+- **SystemMessage** = `BaedalPrompt.SYSTEM_PROMPT` 전문.
+- **UserMessage** = 고객 질문.
+
+(3) 자동 주입된 출력 포맷 + JSON 스키마
+
+- Spring AI 구조화 출력이 `context.spring.ai.chat.client.output.format` 으로 프롬프트에 자동으로 덧붙임
+
+```text
+Your response should be in JSON format.
+... (RFC8259 compliant JSON, markdown 금지) ...
+Here is the JSON Schema instance your output must adhere to:
+{ "properties": {
+    "category":        { "enum": [ "ORDER","DELIVERY","PAYMENT","CANCEL","REFUND","COMPLAINT","ETC" ] },
+    "confidenceLevel": { "enum": [ "HIGH","MEDIUM","LOW" ] },
+    "urgency":         { "enum": [ "LOW","NORMAL","HIGH","CRITICAL" ] },
+    "summary": {"type":"string"}, "nextAction": {"type":"string"},
+    "neededInfo": {"type":"array","items":{"type":"string"}}
+  }, "additionalProperties": false }
+```
+
+
+#### 2. System Prompt 2배 변경 시 입력 토큰 변화
+
+- 질문: `주문번호 2024-1234 배달 어디쯤에 있어요?`
+- temperature: `0.3`
+- 응답: 자동 JSON 스키마 고정 
+- **System Prompt: 기존(짧음) vs 현재(1단계 재설계, ~2배 길이)**
+
+| System Prompt | 입력 토큰 | 출력 토큰 | 총 토큰 | 응답 시간 |
+|---|---|---|---|---|
+| 태초 (규칙 4·금지 3) | **589** | 93 | 682 | 26,027 ms |
+| 현재 (규칙 5·금지 10) | **1248** | 84 | 1332 | 31,673 ms |
+| **Δ (현재−태초)** | **+659 (≈2.12배)** | ≈동일 | +650 | **+5,646 ms (+22%)** |
+
+유저 메시지·자동 JSON 스키마는 두 호출 모두 동일하다. 따라서 **입력 토큰 +659는 전부 System Prompt 텍스트 증가분**이다.
+
+"프롬프트 길이 ∝ 입력 토큰"이 데이터로 확인된다. 길이를 ~2배로 늘리니 입력 토큰도 약 2.12배.
+
+입력이 길수록 응답도 느려진다: +659 토큰 → **+5.6초(+22%)** (로컬 qwen2.5 기준).
+
+**1단계 ↔ 4단계 연결**: 1단계의 프롬프트 재설계(규칙/금지/법적 리스크/인젝션 방어 추가)는 *안전·일관성*을 얻는 대가로 **호출당 +659 토큰·+5.6초**라는 비용을 동반한다. 관측성이 이 트레이드오프를 정량화한다 — "안전은 공짜가 아니다". 운영에서는 프롬프트 설계를 *비용·지연 예산*과 함께 결정해야 한다.
+
+### AI 코드 리뷰
+
+- **대상**: AI에게 *"Spring AI로 배달 상담 챗봇을 만들어줘"* 만 요청해 받은 별도 프로젝트(`baedal-support-agent-ai-version`)
+  - 의외로 RAG(FAQ 벡터스토어)·멀티턴 메모리·주문 Tool·입력 검증·기본 에러 핸들링까지 갖춰, 단골 클리셰(API Key 하드코딩, 입력검증 0, System Prompt 없음)는 **없었다.** 
+  - 그래서 표면이 아닌 *진짜* 프로덕션 결함 3개를 짚는다.
+
+#### 결함 1 — Tool이 인증·소유자 검증 없이 타인 주문 조회·취소 (보안/금전, 치명적)
+
+- `OrderTools`의 `getOrderStatus`·`trackDelivery`·`cancelOrder`는 **주문번호만 있으면** 누구의 주문이든 조회·취소한다(소유자/인증 검증 0). 
+- LLM이 사용자 문장에서 주문번호를 뽑아 자동 호출하므로 `"1002 취소해줘"` 한 줄로 **남의 주문이 실제 취소**된다. 
+- `getOrderStatus`는 `customerName`·결제금액·라이더 실명을 그대로 모델 컨텍스트로 반환 → 프롬프트 인젝션으로 유출 가능.
+- **우리 프로젝트 대비**: 이 결함이 바로 본 프로젝트 [금지] "본인 확인 없는 타인 주문·계정 조회·수정 거부"가 막으려던 것 — AI 버전엔 그 방어가 전무.
+
+- **개선 방안:** 
+
+    ① Tool 실행 전 *인증 주체(세션 사용자)=주문 소유자* 일치 검증, 불일치 시 거부·감사 로깅
+    
+    ② 상태 변경 Tool(`cancelOrder`)은 LLM 자동호출에서 제외하거나 confirm(human-in-the-loop) 경유 
+    
+    ③ Tool 반환 문자열에서 고객명·라이더 실명 등 개인정보 마스킹
+
+#### 결함 2 — 자유 텍스트 단독 + 가드레일·구조화·관측 부재 (운영 불가)
+
+- `SupportChatService`는 `.call().content()` 로 raw `String`만 반환한다. 
+- 카테고리·긴급도·이관 여부 같은 기계가 라우팅할 구조가 없어 상담 시스템에 못 붙는다(본 프로젝트 `SupportResponse`와 대비). 
+- `ChatbotConfig`의 [금지]는 "무관 요청엔 안내" **1줄뿐** → 본 프로젝트 2단계 실패관찰에서 실측한 경쟁사 동조·프롬프트 인젝션·개인정보 유출·언어 드리프트가 그대로 재현될 구조. 
+- 토큰·지연 로깅(4단계 advisor)도 없어 비용·지연을 관측할 수 없다.
+- **개선 방안:**
+
+    ① 구조화 출력(`.entity(record)` — 분류 enum + 이관 플래그)으로 기계 라우팅 가능화 
+    
+    ② [규칙]/[금지] 다층 설계(타사·PII·인젝션·도메인밖 — 본 프로젝트 1단계 수준) 
+
+    ③ `SimpleLoggerAdvisor` + 토큰/지연 advisor 장착으로 관측 확보
+
+#### 결함 3 — 타임아웃·리소스·세션 격리 부재 (가용성/비용)
+
+- LLM 호출에 **타임아웃·재시도·서킷브레이커 없음** 
+- 부하 시 톰캣 스레드 고갈·행. 
+- `message` 길이 상한 없음 → 토큰 폭증·비용·DoS. 
+- `conversationId`는 무검증이라 임의 값으로 **타인 세션 추측·오염** 가능. 
+- 메모리·벡터스토어가 인메모리 → 다중 인스턴스/재시작 시 맥락 소실, 기동마다 FAQ 재임베딩(지연·비용).
+- **개선 방안:**
+
+    ① LLM 호출 timeout + 재시도/서킷브레이커(resilience4j 등) 
+    
+    ② `message` 길이 상한 + 요청 율 제한(`@Size`/Bucket4j) 
+    
+    ③ `conversationId`를 인증 사용자에 바인딩(임의 추측 차단) 
+    
+    ④ ChatMemory·VectorStore 외부화(Redis/pgvector) — 재시작·다중 인스턴스 대비
+
+#### 단골 포인트 대조
+
+| 단골 결함 | AI 버전 | 본 프로젝트 |
+|---|---|---|
+| API Key 하드코딩 | 해당 없음(Ollama 로컬) | 동일 |
+| 입력 검증 없음 | message 빈값만 체크, **길이 무제한** | 동일 한계(개선 대상으로 식별) |
+| System Prompt 미설계 | 있으나 [금지] 1줄 — 얕음 | [규칙]/[금지] 다층 설계 |
+| 에러 핸들링 | `IllegalArgumentException`만 처리, LLM 예외·타임아웃 미처리 | 동일 한계(식별됨) |
+| 토큰/타임아웃 미고려 | **둘 다 없음** | 4단계 토큰·지연 관측 도입 |
+| 동기 호출만 | 동기만 | 동기 + 3단계 스트리밍 분리 |
+| 로깅/모니터링 없음 | **없음** | advisor 2종으로 관측 |
+| 권한·소유자 검증 | **없음(결함 1)** | [금지]로 정책 차단 |
+
+- AI 기본 생성물은 *기능(RAG·툴·메모리)*은 빠르게 갖추지만 **보안 경계(소유자 검증)·운영 가드레일(구조화·관측·타임아웃)** 을 일관되게 빠뜨린다. 
+- "돌아가는 데모"와 "프로덕션"의 간극은 기능이 아니라 *경계·실패·관측 설계*에 있으며, 그 간극을 메우는 것이 1~4단계에서 한 작업이다.
+
+
+#### (참고) AI 버전 프로젝트 구조 한눈에
+
+```
+baedal-support-agent-ai-version/
+├─ build.gradle                       # spring-ai-starter-model-ollama, spring-ai-advisors-vector-store
+├─ src/main/resources/
+│  ├─ application.properties          # Ollama(qwen2.5 / nomic-embed-text), temperature 0.3, FAQ 적재 플래그
+│  └─ faq/baedal-faq.md               # RAG 지식 원문(가정)
+└─ src/main/java/com/baedal/support/
+   ├─ BaedalSupportAgentAiVersionApplication.java
+   ├─ chat/
+   │  ├─ ChatController.java          # POST /api/chat · GET /api/health (얇은 컨트롤러, 예외→400만)
+   │  ├─ ChatRequest / ChatResponse   # message+conversationId / reply+conversationId
+   │  └─ SupportChatService.java      # ChatClient 호출 + conversationId 메모리 바인딩
+   ├─ config/
+   │  ├─ ChatbotConfig.java           # ★핵심: SYSTEM_PROMPT + VectorStore + ChatMemory + ChatClient(advisor·tool 장착)
+   │  └─ FaqIngestionRunner.java      # 기동 시 FAQ→인메모리 벡터스토어 적재
+   └─ order/
+      ├─ Order.java                   # 주문 도메인(record)
+      ├─ OrderService.java            # 인메모리 Mock 주문 4건 + 취소 처리
+      └─ OrderTools.java              # @Tool: getOrderStatus / trackDelivery / cancelOrder (LLM 자동 호출)
+```

@@ -2,6 +2,7 @@ package com.baedal.support;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 public class SupportController {
 
     private final ChatClient.Builder builder;
+    private final PerformanceLoggingAdvisor performanceAdvisor;
 
     // TODO [1단계]: BaedalPrompt.SYSTEM_PROMPT를 적용하고 Structured Output을 반환하라.
     //
@@ -24,6 +26,7 @@ public class SupportController {
     public SupportResponse triage(@RequestBody ChatRequest req) {
         return builder
                 .defaultSystem(BaedalPrompt.SYSTEM_PROMPT)
+                .defaultAdvisors(performanceAdvisor, new SimpleLoggerAdvisor())
                 .build()
                 .prompt()
                 .user(req.message())

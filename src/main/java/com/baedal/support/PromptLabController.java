@@ -2,6 +2,7 @@ package com.baedal.support;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
@@ -14,7 +15,8 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/v1/prompt-lab")
 public class PromptLabController {
 
-    private final ChatClient.Builder builder;
+    @Qualifier("promptLabChatClient")
+    private final ChatClient promptLabChatClient;
 
     // TODO [2단계]: 프롬프트 정량 비교 실험 엔드포인트를 구현하라.
     //
@@ -30,12 +32,9 @@ public class PromptLabController {
     public PromptLabResult experiment(@RequestBody PromptLabRequest req) {
         var results = new ArrayList<SupportResponse>();
 
-        var client = builder
-                .defaultSystem(req.systemPrompt())
-                .build();
-
         for (int i = 0; i < req.repeat(); i++) {
-            var response = client.prompt()
+            var response = promptLabChatClient.prompt()
+                    .system(req.systemPrompt())
                     .user(req.message())
                     .call()
                     .entity(SupportResponse.class);

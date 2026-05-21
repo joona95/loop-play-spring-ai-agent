@@ -2,6 +2,7 @@ package com.baedal.support;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
@@ -11,7 +12,8 @@ import reactor.core.publisher.Flux;
 @RequestMapping("/api/v1/chat/stream")
 public class StreamingChatController {
 
-    private final ChatClient.Builder builder;
+    @Qualifier("streamingChatClient")
+    private final ChatClient streamingChatClient;
 
     // TODO [3단계]: Streaming 응답 엔드포인트를 구현하라.
     //
@@ -28,10 +30,7 @@ public class StreamingChatController {
     // 글자가 한 글자씩 타이핑되듯 나타나면 성공입니다.
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> chatStream(@RequestBody ChatRequest req) {
-        return builder
-                .defaultSystem(BaedalPrompt.SYSTEM_PROMPT)
-                .build()
-                .prompt()
+        return streamingChatClient.prompt()
                 .user(req.message())
                 .stream()
                 .content();

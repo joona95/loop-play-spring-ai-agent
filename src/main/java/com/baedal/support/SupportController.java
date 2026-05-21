@@ -2,7 +2,7 @@ package com.baedal.support;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -10,8 +10,8 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/v1/support")
 public class SupportController {
 
-    private final ChatClient.Builder builder;
-    private final PerformanceLoggingAdvisor performanceAdvisor;
+    @Qualifier("supportChatClient")
+    private final ChatClient supportChatClient;
 
     // TODO [1단계]: BaedalPrompt.SYSTEM_PROMPT를 적용하고 Structured Output을 반환하라.
     //
@@ -24,11 +24,7 @@ public class SupportController {
     // .defaultAdvisors(...)로 등록하여 토큰 수와 응답 시간을 로깅하라.
     @PostMapping
     public SupportResponse triage(@RequestBody ChatRequest req) {
-        return builder
-                .defaultSystem(BaedalPrompt.SYSTEM_PROMPT)
-                .defaultAdvisors(performanceAdvisor, new SimpleLoggerAdvisor())
-                .build()
-                .prompt()
+        return supportChatClient.prompt()
                 .user(req.message())
                 .call()
                 .entity(SupportResponse.class);

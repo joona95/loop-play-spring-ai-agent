@@ -2,6 +2,7 @@ package com.baedal.support;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -9,12 +10,12 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/v1/chat")
 public class ChatController {
 
-    private final ChatClient.Builder chatClientBuilder;
+    @Qualifier("plainChatClient")
+    private final ChatClient plainChatClient;
 
     @PostMapping
     public String chat(@RequestBody ChatRequest request) {
-        return chatClientBuilder.build()
-                .prompt()
+        return plainChatClient.prompt()
                 .user(request.message())
                 .call()
                 .content();

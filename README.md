@@ -17,6 +17,16 @@ Spring AI 기반 배달 상담 에이전트 학습용 스타터 코드입니다.
 
 이 README는 PR 워크플로우 검증용 테스트 커밋입니다.
 
+## 이 PR이 포함하는 것 (요약)
+
+| 단계 | 핵심 산출물 |
+|---|---|
+| [1단계](#1단계-기본-api--system-prompt--structured-output) | [규칙]/[금지] 다층 설계 + 대체 행동 지정 / `Category` 5→7(`CANCEL`·`COMPLAINT`) + tie-break / `confidenceLevel` 추가 |
+| [2단계](#2단계-prompt-engineering-정량-비교--실패-관찰) | 단순 vs 구조화 prompt-lab 정량 / 공격 4종 + **프롬프트 인젝션 실측** / temperature 정량+정성 (0.7 *허위 단정* 재현) |
+| [3단계](#3단계-streaming-응답) | SSE 구현 + 동기 vs 스트리밍 **TTFB·Total 정량 측정** + `/support`에 `.stream().entity()` 컴파일 차단 실측 |
+| [4단계](#4단계-observability--ai-코드-리뷰) | `PerformanceLoggingAdvisor` (fail-open + 실패 latency 기록) + System Prompt 길이 → 입력 토큰 실측(589→1248) + **AI 코드 리뷰** (별도 `baedal-support-agent-ai-version` 비교 — 결함마다 AI 코드 스니펫 인용 + 개선 방안) |
+| 코드 보강 | `ChatClient` 빈 분리(`@Profile` 운영/로컬) · `@Valid`+`@NotBlank` 입력 검증 · tie-break 우선순위 규칙(구체 예시 매핑 포함) |
+| raw 원문 | [`docs/round-1/raw/`](docs/round-1/raw) — 8 파일 (실패관찰·prompt-lab·temperature 정량/정성·streaming·observability 풀로그) |
 
 ---
 
@@ -490,11 +500,20 @@ Here is the JSON Schema instance your output must adhere to:
 
 ### AI 코드 리뷰
 
-- **대상**: AI에게 *"Spring AI로 배달 상담 챗봇을 만들어줘"* 만 요청해 받은 별도 프로젝트(`baedal-support-agent-ai-version`)
-  - 의외로 RAG(FAQ 벡터스토어)·멀티턴 메모리·주문 Tool·입력 검증·기본 에러 핸들링까지 갖춰, 단골 클리셰(API Key 하드코딩, 입력검증 0, System Prompt 없음)는 **없었다.** 
-  - 그래서 표면이 아닌 *진짜* 프로덕션 결함 3개를 짚는다.
+> **리뷰 대상**: AI에게 *"Spring AI로 배달 상담 챗봇을 만들어줘"* 만 요청해 받은 **별도 프로젝트** `baedal-support-agent-ai-version` (chat·config·order 패키지). 본 PR에서는 그 코드의 *핵심 스니펫*을 아래 결함마다 직접 인용해 결함·근거·개선 방안을 짚는다.
+
+의외로 RAG(FAQ 벡터스토어)·멀티턴 메모리·주문 Tool·입력 검증·기본 에러 핸들링까지 갖춰, *단골 클리셰*(API Key 하드코딩, 입력검증 0, System Prompt 없음)는 **없었다.** 그래서 표면이 아닌 *진짜* 프로덕션 결함 3개를 짚는다.
 
 #### 결함 1 — Tool이 인증·소유자 검증 없이 타인 주문 조회·취소 (보안/금전, 치명적)
+
+**AI가 생성한 코드** (`OrderTools.java`):
+
+```java
+@Tool(description = "주문번호로 주문을 취소한다. 취소 가능 여부를 검증하고 결과 메시지를 반환한다.")
+public String cancelOrder(@ToolParam(description = "취소할 주문번호 (예: 1002)") String orderId) {
+    return orderService.cancel(orderId);   // ← 인증·소유자 검증 없이 바로 실행
+}
+```
 
 - `OrderTools`의 `getOrderStatus`·`trackDelivery`·`cancelOrder`는 **주문번호만 있으면** 누구의 주문이든 조회·취소한다(소유자/인증 검증 0). 
 - LLM이 사용자 문장에서 주문번호를 뽑아 자동 호출하므로 `"1002 취소해줘"` 한 줄로 **남의 주문이 실제 취소**된다. 
@@ -511,6 +530,24 @@ Here is the JSON Schema instance your output must adhere to:
 
 #### 결함 2 — 자유 텍스트 단독 + 가드레일·구조화·관측 부재 (운영 불가)
 
+**AI가 생성한 코드**:
+
+```java
+// SupportChatService.java — 응답이 raw String, 분류·이관 신호 0
+String reply = chatClient.prompt()
+        .user(request.message())
+        .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))
+        .call()
+        .content();                              // ← String, 구조화 없음
+return new ChatResponse(reply, conversationId);
+```
+
+```text
+// ChatbotConfig.SYSTEM_PROMPT 의 [금지] — 통째로 한 줄뿐
+[금지]
+- 배달 서비스와 무관한 요청에는 정중히 배달 상담만 도와드릴 수 있다고 안내합니다.
+```
+
 - `SupportChatService`는 `.call().content()` 로 raw `String`만 반환한다. 
 - 카테고리·긴급도·이관 여부 같은 기계가 라우팅할 구조가 없어 상담 시스템에 못 붙는다(본 프로젝트 `SupportResponse`와 대비). 
 - `ChatbotConfig`의 [금지]는 "무관 요청엔 안내" **1줄뿐** → 본 프로젝트 2단계 실패관찰에서 실측한 경쟁사 동조·프롬프트 인젝션·개인정보 유출·언어 드리프트가 그대로 재현될 구조. 
@@ -524,6 +561,29 @@ Here is the JSON Schema instance your output must adhere to:
     ③ `SimpleLoggerAdvisor` + 토큰/지연 advisor 장착으로 관측 확보
 
 #### 결함 3 — 타임아웃·리소스·세션 격리 부재 (가용성/비용)
+
+**AI가 생성한 코드**:
+
+```java
+// ChatController.java — message 길이 상한·타임아웃·LLM 예외 처리 없음
+@PostMapping("/chat")
+public ResponseEntity<?> chat(@RequestBody ChatRequest request) {
+    try {
+        return ResponseEntity.ok(supportChatService.chat(request));
+    } catch (IllegalArgumentException e) {           // ← LLM 예외·timeout는 미처리, 500으로 전파
+        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+    }
+}
+```
+
+```java
+// ChatbotConfig.chatMemory() — InMemory + 세션 식별자 무검증
+return MessageWindowChatMemory.builder()
+        .chatMemoryRepository(new InMemoryChatMemoryRepository())  // ← 재시작·다중 인스턴스 시 맥락 소실
+        .maxMessages(20)
+        .build();
+// SupportChatService에서 conversationId는 클라이언트가 보내는 임의 문자열 그대로 사용 → 타인 세션 추측·오염 가능
+```
 
 - LLM 호출에 **타임아웃·재시도·서킷브레이커 없음** 
 - 부하 시 톰캣 스레드 고갈·행. 

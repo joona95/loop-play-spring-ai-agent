@@ -185,6 +185,10 @@ enum ConfidenceLevel { HIGH, MEDIUM, LOW }
 | 구조화 (기존 `BaedalPrompt`) | `{REFUND:5}` | **1.0** |
 | 구조화 (현재 `BaedalPrompt`, tie-break 규칙 포함) | `{REFUND:5}` | **1.0** |
 
+> raw: [docs/round-1/raw/stage2-promptlab-comparison.txt](docs/round-1/raw/stage2-promptlab-comparison.txt)
+>
+> note: 이 측정 시점의 "tie-break 규칙"은 *우선순위 리스트만* 포함한 형태였다. 이후 *구체 예시 매핑*까지 박은 강화 형태로 재추가했고(`BaedalPrompt`), 재측정 후 결과를 반영할 예정이다.
+
 
 ### 실패 관찰
 
@@ -211,6 +215,8 @@ enum ConfidenceLevel { HIGH, MEDIUM, LOW }
 ```
 
 </details>
+
+> raw: [docs/round-1/raw/stage2-failure-attacks.txt](docs/round-1/raw/stage2-failure-attacks.txt)
 
 치명적 실패(번호 노출·쿠폰 약속)는 안 터졌다. 보호가 **[금지] 한 곳이 아니라 [규칙]·[역할]·모델 자체 정렬에 분산**돼 있기 때문이다. 
 
@@ -262,6 +268,8 @@ enum ConfidenceLevel { HIGH, MEDIUM, LOW }
 | `0.3` | `{REFUND:5}` · **1.0** | `{REFUND:10}` · **1.0** | 분류는 0.0만큼 안정. 동시에 자유 텍스트(summary/nextAction)는 자연스러운 변주를 얻는다                                |
 | `0.7` | `{REFUND:4, COMPLAINT:1}` · **0.8** | `{REFUND:9, COMPLAINT:1}` · **0.9** | 분류가 **흔들리기 시작**. 모호 질문에서 카테고리가 새기 시작.                                                      |
 
+> raw: [docs/round-1/raw/stage2-temperature-quant.txt](docs/round-1/raw/stage2-temperature-quant.txt)
+
 - summary 문구 다양성 (정성 실측, `/api/v1/support` 동일 질문 5회씩)
 
 | temperature | summary 실측 (동일 질문 5회) | 관찰 |
@@ -269,6 +277,8 @@ enum ConfidenceLevel { HIGH, MEDIUM, LOW }
 | `0.0` | 5회 전부 `"배달이 늦었고 환불을 원하시는 것으로 이해했습니다."` (글자까지 동일) | 다양성 **0** — 같은 입력엔 영원히 같은 문장 |
 | `0.3` | `"…늦었고…"`↔`"…늦었으며,…"`, `"…이해했습니다"`↔`"…이해됩니다"`, nextAction 한 번 `"환불 절차 안내 및 배달 지연 확인"`으로 더 풍부 | 카테고리·의미 동일, 어미·조사만 사람처럼 변주 — **안정 + 자연스러움 양립** |
 | `0.7` | `"배달이 늦었으며, 환불도 이루어졌습니다."` (환불 완료 허위 단정) / `nextAction:"환불을 신청하세요."` (명령형 톤 이탈) / `"환불도 필요하신 것으로 보입니다"` | 표현을 넘어 **없는 사실 생성 + 역할 톤 붕괴** — [금지]·정확성 정면 위반, 프로덕션 치명적 |
+
+> raw: [docs/round-1/raw/stage2-temperature-qual.txt](docs/round-1/raw/stage2-temperature-qual.txt) — 15 응답 원문 (5회 × 3 temp)
 
 
 - 결론
@@ -348,6 +358,8 @@ data:.
     ```
 </details>
 
+> raw: [docs/round-1/raw/stage3-sync.txt](docs/round-1/raw/stage3-sync.txt) (동기 평문) · [docs/round-1/raw/stage3-stream.txt](docs/round-1/raw/stage3-stream.txt) (SSE 청크 풀)
+
 ### 설계 결정 문서
 
 #### 1. Streaming을 모든 엔드포인트에 적용해야 하는가? `/api/v1/support`에 `.stream()`을 쓰면?
@@ -401,6 +413,8 @@ response: { "metadata": { "model":"qwen2.5",
 |---|---|---|---|
 | **1248** | 84 | 1332 | **31,673 ms** |
 
+> raw (advisor 풀 로그): [docs/round-1/raw/stage4-advisor-current.log](docs/round-1/raw/stage4-advisor-current.log)
+
 **LLM에 실제 전달된 프롬프트**
 
 (1) 프롬프트 전달 내용
@@ -447,6 +461,8 @@ Here is the JSON Schema instance your output must adhere to:
 |---|---|---|---|---|
 | 태초 (규칙 4·금지 3) | **589** | 93 | 682 | 26,027 ms |
 | 현재 (규칙 5·금지 10) | **1248** | 84 | 1332 | 31,673 ms |
+
+> raw: [docs/round-1/raw/stage4-advisor-original.log](docs/round-1/raw/stage4-advisor-original.log) (태초 호출) · [docs/round-1/raw/stage4-advisor-current.log](docs/round-1/raw/stage4-advisor-current.log) (현재 호출)
 | **Δ (현재−태초)** | **+659 (≈2.12배)** | ≈동일 | +650 | **+5,646 ms (+22%)** |
 
 유저 메시지·자동 JSON 스키마는 두 호출 모두 동일하다. 따라서 **입력 토큰 +659는 전부 System Prompt 텍스트 증가분**이다.

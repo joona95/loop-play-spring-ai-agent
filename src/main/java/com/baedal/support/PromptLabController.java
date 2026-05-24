@@ -1,5 +1,8 @@
 package com.baedal.support;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,7 +32,7 @@ public class PromptLabController {
     // - 단순 프롬프트 vs 구조화된 프롬프트로 각 5회 호출
     // - categoryConsistency 수치를 비교하여 README에 기록
     @PostMapping
-    public PromptLabResult experiment(@RequestBody PromptLabRequest req) {
+    public PromptLabResult experiment(@Valid @RequestBody PromptLabRequest req) {
         var results = new ArrayList<SupportResponse>();
 
         for (int i = 0; i < req.repeat(); i++) {
@@ -45,8 +48,11 @@ public class PromptLabController {
     }
 
     public record PromptLabRequest(
+            @NotBlank(message = "systemPrompt는 null·빈 문자열일 수 없습니다.")
             String systemPrompt,
+            @NotBlank(message = "message는 null·빈 문자열일 수 없습니다.")
             String message,
+            @Min(value = 1, message = "repeat는 1 이상이어야 합니다.")
             int repeat
     ) {}
 

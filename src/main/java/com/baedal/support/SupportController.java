@@ -1,5 +1,6 @@
 package com.baedal.support;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,7 +24,7 @@ public class SupportController {
     // 4단계에서 PerformanceLoggingAdvisor를 구현한 후,
     // .defaultAdvisors(...)로 등록하여 토큰 수와 응답 시간을 로깅하라.
     @PostMapping
-    public SupportResponse triage(@RequestBody ChatRequest req) {
+    public SupportResponse triage(@Valid @RequestBody ChatRequest req) {
         return supportChatClient.prompt()
                 .user(req.message())
                 .call()

@@ -1,5 +1,6 @@
 package com.baedal.support;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,7 +30,7 @@ public class StreamingChatController {
     //
     // 글자가 한 글자씩 타이핑되듯 나타나면 성공입니다.
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> chatStream(@RequestBody ChatRequest req) {
+    public Flux<String> chatStream(@Valid @RequestBody ChatRequest req) {
         return streamingChatClient.prompt()
                 .user(req.message())
                 .stream()

@@ -1,5 +1,6 @@
 package com.baedal.support;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -14,7 +15,7 @@ public class ChatController {
     private final ChatClient plainChatClient;
 
     @PostMapping
-    public String chat(@RequestBody ChatRequest request) {
+    public String chat(@Valid @RequestBody ChatRequest request) {
         return plainChatClient.prompt()
                 .user(request.message())
                 .call()

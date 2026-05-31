@@ -1,9 +1,9 @@
 package com.baedal.support;
 
-
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,9 +26,13 @@ public class AssistantController {
     private final ChatClient assistantChatClient;
 
     @PostMapping
-    public String ask(@Valid @RequestBody ChatRequest req) {
+    public String ask(@Valid @RequestBody ChatRequest req,
+                      @RequestHeader(value = "X-Session-Id", defaultValue = "default") String sessionId) {
+        // [1단계-I] X-Session-Id 헤더로 세션을 분리한다. 헤더가 없으면 "default" 단일 세션.
+        // conversationId는 memoryAdvisor가 이력을 조회·저장할 키로 쓴다(호출 단위 주입).
         return assistantChatClient.prompt()
                 .user(req.message())
+                .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, sessionId))
                 .call()
                 .content();
     }

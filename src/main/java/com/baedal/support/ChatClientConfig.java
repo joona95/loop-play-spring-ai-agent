@@ -2,6 +2,7 @@ package com.baedal.support;
 
 import com.baedal.support.tool.OrderTools;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -31,10 +32,14 @@ public class ChatClientConfig {
      */
     @Bean
     ChatClient supportChatClient(ChatClient.Builder builder,
+                                 MessageChatMemoryAdvisor memoryAdvisor,
                                  PerformanceLoggingAdvisor performanceAdvisor,
                                  ObjectProvider<SimpleLoggerAdvisor> simpleLoggerOpt,
                                  OrderTools orderTools) {
+        // 3주차: memoryAdvisor를 첫 번째로 — 세션 이력을 먼저 주입한 뒤 performance 측정.
+        // 세션별 conversationId는 컨트롤러에서 호출 단위로 .advisors(a -> ...)로 주입한다.
         List<Advisor> advisors = new ArrayList<>();
+        advisors.add(memoryAdvisor);
         advisors.add(performanceAdvisor);
         simpleLoggerOpt.ifAvailable(advisors::add);   // 빈이 등록된 프로파일에서만 추가
         return builder
@@ -44,38 +49,24 @@ public class ChatClientConfig {
                 .build();
     }
 
-    /**
-     * /api/v1/assistant — Tool Calling 흐름을 평문으로 관찰하는 전용 엔드포인트.
-     * BaedalPrompt + PerformanceLoggingAdvisor + SimpleLoggerAdvisor(local/dev) + OrderTools.
-     *
-     * supportChatClient와 설정은 유사하지만 별도 빈으로 둬서 (1) 응답 타입이 평문/JSON으로
-     * 다르게 흘러도 advisor·tool 구성을 독립으로 진화시킬 수 있고, (2) Week 1에서 정착한
-     * "엔드포인트당 1빈" 원칙을 유지한다. 매 요청마다 builder.build()를 호출하던 안티패턴 회피.
-     */
-    @Bean
-    ChatClient assistantChatClient(ChatClient.Builder builder,
-                                   PerformanceLoggingAdvisor performanceAdvisor,
-                                   ObjectProvider<SimpleLoggerAdvisor> simpleLoggerOpt,
-                                   OrderTools orderTools) {
-        List<Advisor> advisors = new ArrayList<>();
-        advisors.add(performanceAdvisor);
-        simpleLoggerOpt.ifAvailable(advisors::add);
-        return builder
-                .defaultSystem(BaedalPrompt.SYSTEM_PROMPT)
-                .defaultAdvisors(advisors.toArray(new Advisor[0]))
-                .defaultTools(orderTools)
-                .build();
-    }
+    // 3주차: assistantChatClient 빈은 메모리 도입과 함께 AssistantChatClientConfig 로 이전됨.
+    //        (같은 이름 빈 중복 정의를 피하기 위해 여기서는 제거)
 
     /**
      * 요청·응답 본문을 DEBUG 로그로 남기는 디버그용 advisor.
      * 운영에는 PII 유출·로그 비용 때문에 등록하지 않는다 — 로컬·개발 프로파일 한정.
      * 활성화: 실행 시 -Dspring.profiles.active=local (또는 dev)
+     *
+     * order(20): memoryAdvisor(order 10)보다 <b>큰</b> order — 즉 메모리 주입 '이후'에 실행된다.
+     * Spring AI advisor 체인은 order 낮을수록 먼저(바깥) 실행되므로,
+     * 기본 order(0)이면 SimpleLogger가 memory(10)보다 먼저 돌아 '주입 전' 프롬프트만 찍힌다
+     * (request 로그 messages=[System, 현재 User]). order를 20으로 올려 memory 주입 후 로깅하면
+     * 주입된 이전 대화 이력까지 DEBUG 로그에 보인다.
      */
     @Bean
     @Profile({"local", "dev"})
     SimpleLoggerAdvisor simpleLoggerAdvisor() {
-        return new SimpleLoggerAdvisor();
+        return new SimpleLoggerAdvisor(20);
     }
 
     /** /api/v1/chat/stream — BaedalPrompt만 적용, advisor 없음(현 동작 유지). */
